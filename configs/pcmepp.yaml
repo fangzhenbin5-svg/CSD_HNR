@@ -15,9 +15,9 @@ model:
     no_imgnorm: false #不图像归一化（关闭）
     no_txtnorm: false #不文本归一化（关闭）
     sigma_ln_init: null #不使用特殊初始化，走默认初始化。
-    # CSD只使用所有方差维度之和，因此直接预测可辨识的标量总方差，
-    # 再均匀广播到1024维，避免少数维度撑起全部方差。
-    scalar_total_variance: true
+    # 使用原始PCME++逐维log方差分支；HNR只校准总方差
+    # sum(exp(log_sigma^2))，不强制各维平均分配。
+    scalar_total_variance: false
     total_var_min: 0.01
     total_var_max: 0.30
     total_var_init: 0.10
@@ -83,7 +83,8 @@ hubness_neighbor:
     start_epoch: 5
     warmup_epochs: 5
 
-    # 标量sigma校准：中心性越高，作为候选hub的风险越高。
+    # 总方差sigma校准：中心性越高，作为候选hub的风险越高。
+    # 约束sum(exp(log_sigma^2))，但保留逐维sigma表达能力。
     lambda_sigma: 0.01
     total_var_min: 0.01
     total_var_max: 0.30
@@ -105,7 +106,7 @@ hubness_neighbor:
 
 # detailed training configuration
 train:
-    expname: /home/16t/fangzb/CSD_HNR/results_csd_hnr_rho01
+    expname: /home/16t/fangzb/CSD_HNR/results_csd_hnr_perdim_v1
     train_epochs: 25
     log_step: 100 #每 100 step 记录一次日志。
     pbar_step: 1450 #每 1450 step 更新一次进度条。1450 = 128(batch_size) * 11.33(steps per epoch)

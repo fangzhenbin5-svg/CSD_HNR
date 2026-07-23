@@ -103,43 +103,35 @@ L_total = L_csd_bce + lambda_sigma * L_hnr_sigma + lambda_neighbor * L_hnr_neigh
 3. mAP@R / R-Precision 对整体语义排序更敏感。
 ```
 
-### 4.1 解决 sigma 塌缩
+### 4.1 解决 sigma 贴底退化
 
-原始 PCME++ 理论上希望 `sigma` 表示样本不确定性。但在实际训练中，模型可能找到一种更容易优化的解：
-
-```text
-1. 大部分 sigma 维度变得极小。
-2. 少数维度保持较大值。
-3. 平均方差看起来没有完全归零。
-4. 但样本级不确定性已经不稳定、不好解释。
-```
-
-这会导致一个关键偏差：我们希望 `sigma` 表示“这个样本是否语义模糊”，但模型实际可能把它当成某种维度级调参工具。
-
-当前工程的解决方式是：
+原始 PCME++ 理论上希望 `sigma` 表示样本不确定性。但 CSD 主损失中：
 
 ```text
-per-dim free sigma -> scalar total variance
+D_CSD(i,j) = semantic_distance(i,j) + V_img_i + V_txt_j
 ```
 
-也就是说，每个样本先只预测一个整体不确定性 `V`：
+较大的 `V` 会增大距离，降低匹配置信度。因此如果只依赖主匹配损失，模型可能倾向于把 `sigma` 压小，出现贴近下限或语义区分不足的问题。
+
+我们曾尝试过一个更强的结构约束：
 
 ```text
-image_i -> V_img_i
-text_j  -> V_txt_j
+per-dim sigma -> scalar total variance -> 均匀广播到各维
 ```
 
-然后再平均分配到每个维度以兼容 PCME++ 的 CSD 代码：
+但对基础 PCME++ checkpoint 做小样本逐维方差统计后，没有发现“少数维度撑起总方差”的极端集中现象。因此当前主线不再强制平均分配方差，而是切回原始 PCME++ 的逐维 `log sigma^2`：
 
 ```text
-per_dim_variance = V / D
+feature -> per-dim log sigma^2 in R^D
 ```
 
-这样做后，模型不能再通过“少数维度很大、多数维度塌缩”的方式伪装出一个合理平均值。`sigma` 的含义被强制收束为：
+HNR 只约束逐维方差的总量：
 
 ```text
-这个样本整体有多不确定。
+V_pred = sum_d exp(log sigma_d^2)
 ```
+
+这样保留逐维 `sigma` 的表达能力，同时用邻域结构给总不确定性提供语义校准。
 
 ### 4.2 给 sigma 一个语义校准依据
 
@@ -236,143 +228,102 @@ HNR 的 soft neighbor weight 正是为这个目标服务：
 
 ## 5. Sigma 建模线
 
-### 5.1 原始问题
+### 5.1 当前主线：原始逐维 sigma
 
-原始 PCME++ 中，每个样本直接预测高维对数方差：
-
-```text
-log sigma^2 in R^D
-```
-
-例如 `D = 4` 时，一个文本样本可能学成：
+当前主线使用原始 PCME++ 的逐维不确定性分支，不再强制平均分配方差：
 
 ```text
-[0.0001, 0.0001, 0.0001, 0.3997]
+feature -> std branch -> per-dim log sigma^2 in R^D
 ```
 
-总方差为：
+图像和文本分别得到：
 
 ```text
-0.0001 + 0.0001 + 0.0001 + 0.3997 = 0.4000
+image_i -> log sigma_img_i^2 in R^D
+text_j  -> log sigma_txt_j^2 in R^D
 ```
 
-表面看总方差不小，但实际上前三个维度已经接近退化，只有一个维度承担了主要不确定性。这会造成两个问题：
+这保留了逐维表达能力。也就是说，模型仍然可以表达某个样本在不同语义方向上的不确定性差异，而不是所有维度共用同一个方差值。
+
+### 5.2 总方差用于 CSD 和 HNR
+
+虽然模型输出逐维 `log sigma^2`，但 CSD 和 HNR 关心的是总方差：
 
 ```text
-1. sigma 的样本级解释性变差。
-2. 平均方差不能真实反映不确定性是否退化。
+V_pred = sum_d exp(log sigma_d^2)
 ```
 
-### 5.2 当前 scalar total variance 设计
-
-当前版本不再让 uncertainty head 直接输出自由的高维 `log sigma^2`，而是先输出一个样本级总方差：
+在代码中等价写法是：
 
 ```text
-V_img in R
-V_txt in R
+log V_pred = logsumexp(log sigma^2, dim=-1)
+V_pred = exp(log V_pred)
 ```
 
-计算方式为：
+因此当前方案是：
 
 ```text
-raw = Linear(feature)
-V = V_min + (V_max - V_min) * sigmoid(raw)
+逐维 sigma 负责表达能力；
+总方差 V_pred 负责参与 CSD 和 HNR 校准。
 ```
 
-当前默认：
+### 5.3 HNR 如何校准总方差
+
+HNR 根据 feature queue 估计样本的跨模态中心性：
 
 ```text
-V_min = 0.01
-V_max = 0.30
+centrality_img = mean(cosine(mu_img, text_queue))
+centrality_txt = mean(cosine(mu_txt, image_queue))
 ```
 
-所以：
+然后用 EMA 均值/方差进行标准化：
 
 ```text
-V = 0.01 + 0.29 * sigmoid(raw)
+z = (centrality - EMA_mean) / sqrt(EMA_var)
 ```
 
-该设计不是某一篇论文的原封不动结构，而是基于以下依据做出的工程化约束：
+再映射成目标总方差：
 
 ```text
-1. PCME / PCME++ 的概率嵌入思想：每个样本都应该有自己的不确定性。
-2. 异方差不确定性建模：不同难度样本应该具有不同方差。
-3. bounded variance 技巧：用 sigmoid 将方差限制在合理区间，防止塌缩或无限增大。
-4. 当前实验现象：原始 per-dim sigma 存在维度级退化。
+V_target = V_min + (V_max - V_min) * sigmoid(z / temperature)
 ```
 
-### 5.3 为什么使用 `[0.01, 0.30]`
-
-该范围不是论文固定值，而是根据 CSD 距离尺度选择的第一版实验范围。
-
-PCME++ 的 CSD 距离可以理解为：
-
-```text
-D_CSD(i,j) = semantic_distance(mu_img_i, mu_txt_j) + V_img_i + V_txt_j
-```
-
-其中：
-
-```text
-semantic_distance = 2 - 2 * cosine(mu_img_i, mu_txt_j)
-```
-
-因为 `mu` 经过 L2 normalize，理论上：
-
-```text
-semantic_distance in [0, 4]
-```
-
-但真实检索排序中，前排样本之间的距离差异通常远小于 4，很多关键差异可能在：
-
-```text
-0.01 ~ 0.5
-```
-
-因此方差不能太大，否则 `V_img + V_txt` 会压过语义中心距离；也不能太小，否则模型仍然容易退化为确定性模型。
-
-选择：
+当前 HNR 目标范围：
 
 ```text
 V_min = 0.01
 V_max = 0.30
 ```
 
-意味着：
+最后用 SmoothL1 校准：
 
 ```text
-单个样本最小总方差为 0.01
-单个样本最大总方差为 0.30
-图文 pair 最大联合方差为 0.60
+L_hnr_sigma = SmoothL1(log V_pred, log V_target)
 ```
 
-这个范围足以影响排序，但不会完全主导排序。
-
-### 5.4 从 total variance 到 log sigma squared
-
-由于 PCME++ 原始 CSD 代码仍然需要高维 `log sigma^2`，当前实现会把样本级总方差平均分配到每个维度：
+注意，这里只约束总量：
 
 ```text
-per_dim_variance = V / D
-log_sigma_squared = log(per_dim_variance)
+sum_d exp(log sigma_d^2)
 ```
 
-例如：
+不强制每个维度都相等。
+
+### 5.4 scalar total variance 作为 ablation
+
+工程里仍保留 `ScalarTotalVarianceHead`，但当前配置关闭：
 
 ```text
-D = 1024
-V = 0.1024
-per_dim_variance = 0.1024 / 1024 = 0.0001
-log_sigma_squared = log(0.0001) ~= -9.21
+scalar_total_variance: false
 ```
 
-然后 broadcast 成：
+它只作为 ablation 方案存在。该方案流程是：
 
 ```text
-[log_sigma_squared, log_sigma_squared, ..., log_sigma_squared]
+feature -> raw -> sigmoid -> scalar V -> V / D -> broadcast log sigma^2
 ```
 
-这样可以兼容原有 CSD 实现，同时避免少数维度撑起总方差的问题。
+基础 PCME++ checkpoint 的小样本统计没有发现逐维方差极端集中，因此主线不再使用这个平均分配方案。
 
 ## 6. CSD 主匹配线
 
@@ -606,9 +557,9 @@ epoch 10 以后: HNR 使用完整权重。
 
 | 参数 | 作用 | 默认值 | 调节方向 |
 |---|---|---:|---|
-| `model.prob_embed.scalar_total_variance` | 是否使用样本级总方差 | `true` | 当前方案应保持开启 |
-| `model.prob_embed.variance_min` | 最小总方差 | `0.01` | 过低可能退化，过高可能伤 R@1 |
-| `model.prob_embed.variance_max` | 最大总方差 | `0.30` | 过低 sigma 影响弱，过高可能干扰 mu 排序 |
+| `model.scalar_total_variance` | 是否启用标量平均方差 ablation | `false` | 当前主线保持关闭，使用原始逐维 sigma |
+| `hubness_neighbor.total_var_min` | HNR 目标总方差下限 | `0.01` | 过低可能退化，过高可能伤 R@1 |
+| `hubness_neighbor.total_var_max` | HNR 目标总方差上限 | `0.30` | 过低 sigma 影响弱，过高可能干扰 mu 排序 |
 | `hubness_neighbor.enable` | 是否启用 HNR | `true` | 当前方案应保持开启 |
 | `hubness_neighbor.start_epoch` | HNR 启动 epoch | `5` | 早启动风险高，晚启动影响弱 |
 | `hubness_neighbor.warmup_epochs` | HNR 权重 warmup 长度 | `5` | 用于平滑启动 |
@@ -671,7 +622,7 @@ soft neighbor 或 variance range 太激进，sigma 开始干扰 mu 的精确匹�
 
 | 文件 | 作用 |
 |---|---|
-| `pcmepp/models/uncertainty.py` | scalar total variance head |
+| `pcmepp/models/uncertainty.py` | scalar total variance ablation head，当前主线不启用 |
 | `pcmepp/models/img_encoder.py` | 图像概率嵌入输出 |
 | `pcmepp/models/txt_encoder.py` | 文本概率嵌入输出 |
 | `pcmepp/hubness_neighbor.py` | HNR 主模块 |
