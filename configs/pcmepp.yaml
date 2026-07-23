@@ -1,0 +1,126 @@
+dataloader:
+    data_name: coco #表示数据集名称，根据名字选择不同的数据集加载方式
+    data_path: /home/16t/fangzb/data/COCO/coco2014
+    batch_size: 128
+    eval_batch_size: 128
+    workers: 1
+
+model:
+    is_probabilistic_model: true #表示启用概率嵌入模型
+    n_unc_layers: 1 #表示不确定性预测头的层数。增加层数可能会让不确定性建模能力更强，但也会增加参数量和过拟合风险。
+    backbone_source: clip_ViT-B/32
+    precomp_enc_type: backbone
+    embed_size: 1024 #表示嵌入向量的维度。较大的嵌入维度可能会捕捉更多的语义信息，但也会增加计算和存储开销。
+    img_dim: 768 #表示图像输入的维度
+    no_imgnorm: false #不图像归一化（关闭）
+    no_txtnorm: false #不文本归一化（关闭）
+    sigma_ln_init: null #不使用特殊初始化，走默认初始化。
+    # CSD只使用所有方差维度之和，因此直接预测可辨识的标量总方差，
+    # 再均匀广播到1024维，避免少数维度撑起全部方差。
+    scalar_total_variance: true
+    total_var_min: 0.01
+    total_var_max: 0.30
+    total_var_init: 0.10
+
+# optimizer configuration
+optim:
+    name: adamp #使用adamp优化器，它是Adam的一个变体，适用于概率模型。
+    lr: 0.0005
+    wd: 0.0001 #权重衰减
+    layerwise_lr_decay: 0.7 #层级学习率衰减。越靠近输出层，学习率越大，越靠近底层，学习率越小，保护 CLIP 预训练好的底层特征，不让它被破坏。Transformer 微调时常用这个技巧
+    txt_backbone_lr_decay: 0.1  #文本 backbone 的学习率缩放。
+    img_backbone_lr_decay: 0.01 #图像 backbone 的学习率缩放。
+
+# lr scheduler configuration 学习率调度器配置
+lr_scheduler:
+    - name: ConstantLR  #前 15 个 epoch，lr × 1
+      factor: 1
+      total_iters: 15
+      milestone: 15
+    - name: ConstantLR #后 10 个 epoch，lr × 0.1
+      factor: 0.1
+      total_iters: 10
+      milestone: 25
+
+# criterion configuration 损失函数配置
+criterion:
+    name: pcmepp #使用 PCME++ 损失函数
+    init_negative_scale: 5 #负样本缩放因子的初始值。scale 越大，模型越强调区分正负样本,scale 越小，训练信号更平滑.
+    init_shift: 5 #初始平移量
+    vib_beta: 0 #HNR使用有检索含义的中心性目标校准sigma，不使用VIB先验。
+    prob_distance: csd #概率分布之间的距离计算方式。
+    smoothness_alpha: 0 #关闭PCME++硬PP；HNR只使用连续软邻域，不改写标签。
+
+#MSDA混合样本增强
+augment:
+    mixup: 0  #关闭MSDA，保证同模态邻域教师使用完整配对。
+    cutmix: 0
+    cutmix_minmax: null #CutMix 裁剪区域大小限制。
+    mixup_prob: 0
+    mixup_switch_prob: 0.5 #Mixup 和 CutMix 的切换概率。0.5 表示一半的 batch 用 Mixup，一半用 CutMix。
+    mixup_mode: elem #Mixup 的模式。elem 表示按元素混合，batch 表示按 batch 混合，pair 表示按样本对混合。
+    mix_batch_ratio: 0.25 #Mixup 的 batch 混合比例。0.25 表示 25% 的样本来自另一个 batch。
+    mixup_off_epoch: 0
+    mixup_smoothing: 0
+    img_size_augment: 0.2 #图像大小增强的比例。
+    txt_size_augment: 0.2 #文本大小增强的比例。
+    txt_size_augment_masking: 0.5 #文本大小增强的掩码比例。通过 mask token 的方式实现。
+    txt_size_augment_erasing: 0.1 #文本大小增强的擦除比例。直接删除或擦除部分文本 token。
+    label_smoothing: 0.0001    #标签平滑。标签平滑可以缓解过拟合和模型对噪声标签的敏感性。
+#验证配置
+validation:
+    eval_by_csd: true #验证时使用 csd 概率距离进行评估。
+    eval_by_prob_sims: false
+
+# CSD-HNR：无成对历史、无硬伪标签。
+# 队列只保存近期FP16均值特征，用于估计候选中心性；重启后自动重建。
+hubness_neighbor:
+    enable: true
+    queue_size: 8192
+    min_queue_size: 1024
+
+    # Epoch 0-4只训练CSD；Epoch 5-9线性启动HNR。
+    start_epoch: 5
+    warmup_epochs: 5
+
+    # 标量sigma校准：中心性越高，作为候选hub的风险越高。
+    lambda_sigma: 0.01
+    total_var_min: 0.01
+    total_var_max: 0.30
+    centrality_ema_momentum: 0.99
+    centrality_temperature: 1.0
+    centrality_z_clip: 3.0
+
+    # 双向软邻域列表排序。
+    lambda_neighbor: 0.05
+    neighbor_rho: 0.10
+    neighbor_topk: 20
+    teacher_temperature: 0.05
+    student_temperature: 1.0
+    evidence_temperature: 0.05
+    same_modal_threshold: 0.50
+    direct_similarity_threshold: 0.20
+    candidate_centrality_weight: 0.10
+    negative_min_weight: 0.20
+
+# detailed training configuration
+train:
+    expname: /home/16t/fangzb/CSD_HNR/results_csd_hnr_rho01
+    train_epochs: 25
+    log_step: 100 #每 100 step 记录一次日志。
+    pbar_step: 1450 #每 1450 step 更新一次进度条。1450 = 128(batch_size) * 11.33(steps per epoch)
+    grad_clip: 2 #梯度裁剪，防止梯度爆炸。2 表示梯度范数超过 2 时进行裁剪。防止训练不稳定，尤其是概率模型里的 sigma 分支容易出现梯度波动
+    linear_warmup: false #Linear warmup 是指训练初期学习率从 0 慢慢升到目标学习率。这里关闭
+    embedding_warmup_after_freeze: true #backbone 冻结阶段结束后，对 embedding 层做 warmup。
+    precision: 32-true #使用 32-bit 浮点训练。
+    torch_compile: false #关闭无效编译等待，便于稳定启动和排查。
+    img_backbone_freeze_epochs: 2 #2 个 epoch 图像 backbone 冻结。
+    txt_backbone_freeze_epochs: 0 #文本 backbone 不冻结。
+    img_backbone_reinit_layers: 0 #图像 backbone 不重新初始化。
+    txt_backbone_reinit_layers: 0 #文本 backbone 不重新初始化。
+    embedding_warmup_epochs: 2 #embedding 层 warmup 2 个 epoch。projection head / probabilistic embedding head 在训练早期逐步进入正常学习率，而不是一开始就大步更新。
+    
+    swa_start_epoch: 16 #swa 开始 epoch。swa 是 Stochastic Weight Averaging 的缩写，表示在训练后期对模型权重进行平均，以获得更平滑的损失曲线和更好的泛化能力。
+    swa_per_epochs: 1 #swa 每 1 个 epoch 更新一次。
+    
+    early_stopping: false #是否启用早停策略。
