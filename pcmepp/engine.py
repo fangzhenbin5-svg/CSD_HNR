@@ -184,6 +184,7 @@ class PCMEPPModel(pl.LightningModule):
         img_emb, cap_emb, matched, _ = self.forward_step(batch, self.mixup_fn)
         hnr_loss = img_emb['mean'].sum() * 0.0
         pair_weight = None
+        soft_target = None
         hnr_logs = {}
         if self.hnr.enabled:
             if self.opt.train.get('dist_train'):
@@ -193,13 +194,13 @@ class PCMEPPModel(pl.LightningModule):
                 raise ValueError(
                     'CSD-HNR requires MSDA Mixup/CutMix to be disabled because '
                     'its same-modal teacher assumes intact paired samples')
-            hnr_loss, pair_weight, hnr_logs = self.hnr(
+            hnr_loss, pair_weight, soft_target, hnr_logs = self.hnr(
                 img_emb, cap_emb, matched, self.current_epoch,
                 self.criterion.negative_scale, self.criterion.shift)
         if not self.opt.train.get('dist_train'):
             loss, loss_dict = self.criterion(
                 img_emb, cap_emb, matched=matched,
-                pair_weight=pair_weight)
+                pair_weight=pair_weight, soft_target=soft_target)
         else:
             # code for the distributed training
             rank = dist.get_rank()

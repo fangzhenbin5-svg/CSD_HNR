@@ -84,8 +84,17 @@ class ClosedFormSampledDistanceLoss(nn.Module):
 
     #
     def _compute_prob_matching_loss(
-            self, logits, matched, smoothness=0, pair_weight=None):
-        matched, n_pseudo_gts = self._recompute_matched(matched, logits, smoothness)
+            self, logits, matched, smoothness=0, pair_weight=None,
+            soft_target=None):
+        matched, n_pseudo_gts = self._recompute_matched(
+            matched, logits, smoothness)
+        if soft_target is not None:
+            if soft_target.shape != logits.shape:
+                raise ValueError(
+                    'soft_target and logits must have identical shapes, got '
+                    f'{soft_target.shape=} and {logits.shape=}')
+            matched = soft_target.to(device=logits.device, dtype=logits.dtype)
+
         if pair_weight is None:
             loss = self.bceloss(logits, matched)
         else:
@@ -108,7 +117,7 @@ class ClosedFormSampledDistanceLoss(nn.Module):
     #PCME++ 默认使用的概率距离。D(i, j) = ||μ_i - μ_j||² + sum(σ_i² + σ_j²)
     def _compute_closed_form_loss(
             self, input1, input2, matched, smoothness=0,
-            pair_weight=None):
+            pair_weight=None, soft_target=None):
         """ Closed-form probabilistic matching loss -- See Eq (1) and (2) in the paper.
         """
         mu_pdist = ((input1['mean'].unsqueeze(1) - input2['mean'].unsqueeze(0)) ** 2).sum(-1)
@@ -117,14 +126,14 @@ class ClosedFormSampledDistanceLoss(nn.Module):
         logits = -self.negative_scale * logits + self.shift
         loss_dict = self._compute_prob_matching_loss(
             logits, matched, smoothness=smoothness,
-            pair_weight=pair_weight)
+            pair_weight=pair_weight, soft_target=soft_target)
         loss_dict['loss/mu_pdist'] = mu_pdist.mean()
         loss_dict['loss/sigma_pdist'] = sigma_pdist.mean()
         return loss_dict
 
     def _compute_wd_loss(
             self, input1, input2, matched, smoothness=0,
-            pair_weight=None):
+            pair_weight=None, soft_target=None):
         """ Wasserstien loss (only used for the ablation study)
         """
         #概率距离
@@ -137,12 +146,14 @@ class ClosedFormSampledDistanceLoss(nn.Module):
         logits = -self.negative_scale * logits + self.shift
         loss_dict = self._compute_prob_matching_loss(
             logits, matched, smoothness=smoothness,
-            pair_weight=pair_weight)
+            pair_weight=pair_weight, soft_target=soft_target)
         loss_dict['loss/mu_pdist'] = mu_pdist.mean()
         loss_dict['loss/sigma_pdist'] = sigma_pdist.mean()
         return loss_dict
     #主流程函数
-    def forward(self, img_emb, cap_emb, matched=None, pair_weight=None):
+    def forward(
+            self, img_emb, cap_emb, matched=None, pair_weight=None,
+            soft_target=None):
         if self.prob_distance == 'wdist':
             loss_fn = self._compute_wd_loss
         else:
@@ -160,7 +171,7 @@ class ClosedFormSampledDistanceLoss(nn.Module):
 
         loss = loss_fn(
             img_emb, cap_emb, matched=matched,
-            pair_weight=pair_weight)
+            pair_weight=pair_weight, soft_target=soft_target)
         # NOTE: Efficient implementation for
         # when i2t loss and t2i loss are the same (https://github.com/naver-ai/pcme/issues/3)
         loss = 2 * loss['loss'] + self.vib_beta * vib_loss

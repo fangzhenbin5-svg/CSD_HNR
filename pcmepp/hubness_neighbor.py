@@ -58,6 +58,15 @@ class HubnessNeighborRegularizer(nn.Module):
             return 1.0
         return min(1.0, (int(epoch) - start_epoch + 1) / warmup_epochs)
 
+    def _soft_label_factor(self, epoch):
+        start_epoch = int(self.cfg.get('soft_label_start_epoch', 8))
+        warmup_epochs = int(self.cfg.get('soft_label_warmup_epochs', 5))
+        if int(epoch) < start_epoch:
+            return 0.0
+        if warmup_epochs <= 0:
+            return 1.0
+        return min(1.0, (int(epoch) - start_epoch + 1) / warmup_epochs)
+
     def _active_queue(self, queue):
         count = int(self.queue_count.item())
         if count < self.queue_size:
@@ -267,7 +276,8 @@ class HubnessNeighborRegularizer(nn.Module):
 
     def _neighborhood_loss(
             self, image_mean, text_mean, image_logvar, text_logvar,
-            matched, image_z, text_z, negative_scale, shift, rho):
+            matched, image_z, text_z, negative_scale, shift, rho,
+            soft_label_factor):
         image = F.normalize(image_mean.float(), dim=-1)
         text = F.normalize(text_mean.float(), dim=-1)
         positive_mask = matched.detach() > 0.5
@@ -320,6 +330,33 @@ class HubnessNeighborRegularizer(nn.Module):
             pair_weight = torch.where(
                 positive_mask, torch.ones_like(pair_weight), pair_weight)
 
+            soft_target = None
+            soft_label_enabled = bool(
+                self.cfg.get('soft_label_enable', False))
+            soft_label_max = float(self.cfg.get('soft_label_max', 0.30))
+            if not 0.0 <= soft_label_max <= 1.0:
+                raise ValueError('soft_label_max must be in [0, 1]')
+            if soft_label_enabled and soft_label_factor > 0:
+                # Soft labels are stricter than pair reweighting: they require
+                # evidence from both retrieval directions.  A high one-way
+                # score can reduce negative punishment, but it cannot become
+                # a weak positive unless the reverse direction agrees.
+                bidirectional_confidence = torch.sqrt(
+                    (i2t_gate * t2i_gate.t()).clamp_min(0.0))
+                soft_value = (
+                    soft_label_max * float(soft_label_factor)
+                    * bidirectional_confidence)
+                base_target = matched.detach().to(
+                    device=soft_value.device, dtype=soft_value.dtype)
+                soft_target = (
+                    base_target + (1.0 - base_target) * soft_value
+                ).clamp(0.0, 1.0)
+                soft_target = torch.where(
+                    positive_mask, base_target, soft_target)
+            else:
+                bidirectional_confidence = torch.zeros_like(
+                    relation_confidence)
+
         logs = {
             'hnr/neighbor_raw': raw_loss.detach(),
             'hnr/i2t_neighbor_loss': i2t_loss.detach(),
@@ -331,8 +368,23 @@ class HubnessNeighborRegularizer(nn.Module):
             'hnr/relation_confidence_mean':
                 relation_confidence.mean(),
             'hnr/pair_weight_mean': pair_weight.mean(),
+            'hnr/soft_label_factor': image_mean.new_tensor(
+                float(soft_label_factor)),
+            'hnr/soft_label_confidence_mean':
+                bidirectional_confidence.mean(),
         }
-        return raw_loss, pair_weight, logs
+        if soft_target is not None:
+            negative_mask = ~positive_mask
+            soft_values = soft_target.masked_select(negative_mask)
+            logs['hnr/soft_label_mean'] = soft_values.mean()
+            logs['hnr/soft_label_count'] = (
+                soft_values > matched.detach().masked_select(
+                    negative_mask).to(soft_values.dtype)
+            ).sum()
+        else:
+            logs['hnr/soft_label_mean'] = image_mean.new_tensor(0.0)
+            logs['hnr/soft_label_count'] = image_mean.new_tensor(0)
+        return raw_loss, pair_weight, soft_target, logs
 
     def forward(
             self, image_emb, text_emb, matched, epoch,
@@ -340,13 +392,14 @@ class HubnessNeighborRegularizer(nn.Module):
         zero = image_emb['mean'].sum() * 0.0
         pair_weight = torch.ones_like(
             matched, dtype=image_emb['mean'].dtype)
+        soft_target = None
         logs = {
             'hnr/queue_count': image_emb['mean'].new_tensor(
                 int(self.queue_count.item())),
             'hnr/warmup_factor': image_emb['mean'].new_tensor(0.0),
         }
         if not self.enabled:
-            return zero, pair_weight, logs
+            return zero, pair_weight, soft_target, logs
 
         factor = self._warmup_factor(epoch)
         min_queue = int(self.cfg.get('min_queue_size', 1024))
@@ -355,7 +408,7 @@ class HubnessNeighborRegularizer(nn.Module):
             self.enqueue(image_emb['mean'], text_emb['mean'])
             logs['hnr/queue_count'] = image_emb['mean'].new_tensor(
                 int(self.queue_count.item()))
-            return zero, pair_weight, logs
+            return zero, pair_weight, soft_target, logs
 
         image_centrality, text_centrality = self._centrality(
             image_emb['mean'], text_emb['mean'])
@@ -365,12 +418,13 @@ class HubnessNeighborRegularizer(nn.Module):
             image_emb['std'], text_emb['std'], image_z, text_z)
 
         rho = float(self.cfg.get('neighbor_rho', 0.10)) * factor
-        neighbor_raw, pair_weight_full, neighbor_logs = \
+        soft_factor = self._soft_label_factor(epoch)
+        neighbor_raw, pair_weight_full, soft_target, neighbor_logs = \
             self._neighborhood_loss(
                 image_emb['mean'], text_emb['mean'],
                 image_emb['std'], text_emb['std'],
                 matched, image_z, text_z,
-                negative_scale, shift, rho)
+                negative_scale, shift, rho, soft_factor)
         # Pair softening follows the same schedule as the auxiliary losses.
         pair_weight = 1.0 - factor * (1.0 - pair_weight_full)
 
@@ -397,10 +451,12 @@ class HubnessNeighborRegularizer(nn.Module):
             'hnr/queue_count': image_emb['mean'].new_tensor(
                 int(self.queue_count.item())),
             'hnr/warmup_factor': image_emb['mean'].new_tensor(factor),
+            'hnr/soft_label_factor': image_emb['mean'].new_tensor(
+                soft_factor),
             'hnr/rho_current': image_emb['mean'].new_tensor(rho),
             'hnr/lambda_sigma_current':
                 image_emb['mean'].new_tensor(sigma_weight),
             'hnr/lambda_neighbor_current':
                 image_emb['mean'].new_tensor(neighbor_weight),
         })
-        return total, pair_weight, logs
+        return total, pair_weight, soft_target, logs
