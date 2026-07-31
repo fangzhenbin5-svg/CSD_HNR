@@ -1,0 +1,7 @@
+﻿实验标志,soft_label_max,same_modal_threshold,direct_similarity_threshold,candidate_centrality_weight,neighbor_rho,lambda_neighbor,negative_min_weight,mAP@R avg,R-Precision avg,COCO 5K R@1 avg,I2T mAP@R,T2I mAP@R,soft_label_mean,soft_label_count,pair_weight_mean,image σ-corr,text σ-corr,备注
+E2,0.3,0.45,0.15,0.10,0.10,0.02,0.3,39.79,49.41,53.21,31.90,47.68,0.0159,1969,0.9486,0.979,0.973,已完成
+E3,0.4,0.45,0.15,0.10,0.10,0.02,0.3,39.50,49.27,52.47,31.55,47.44,0.0235,2015,0.9431,0.973,0.957,已完成
+E4-quality,0.3,0.47,0.18,0.15,0.10,0.02,0.3,40.01,49.61,53.86,32.03,47.99,0.00317,885,0.9869,0.967,0.881,"已完成；最佳 mAP@R checkpoint 为 epoch21；SWA：mAP@R=39.96，R-Precision=49.54，COCO 5K R@1=54.19"
+E5-quality-mid,0.30,0.46,0.17,0.13,0.10,0.02,0.30,39.65,49.45,53.63,31.74,47.56,0.00726,1274,0.9756,0.968,0.925,训练中-截至epoch18；当前best epoch18；COCO5K R@1 best epoch17=53.82；未超过E4
+E6-quality-rho,0.3,0.47,0.18,0.15,0.15,0.02,0.3,39.54,49.28,52.88,31.56,47.51,,,,,,已停止于 epoch18；提高 neighbor_rho 后未超过 E4
+E7-no-neighbor-loss,0.3,0.47,0.18,0.15,0.10,0.00,0.3,39.14,48.97,51.88,30.86,47.42,0.0100,1326,0.9707,0.984,0.950,"已完成；最佳 mAP@R checkpoint 为 epoch23；SWA：mAP@R=39.21，R-Precision=49.03，COCO 5K R@1=52.27；关闭邻域列表损失后明显低于 E4，说明列表级排序约束有效"
