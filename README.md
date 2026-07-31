@@ -13,7 +13,7 @@
 
 目标不是更换 CLIP backbone，也不加入额外数据集，而是在原始训练集和 ViT-B/32 基座下，让模型更好处理“一图多文 / 一文多图”的语义相关样本。
 
-## 当前版本：CSD-HNR SoftLabel E2
+## 当前版本：CSD-HNR SoftLabel E4-quality
 
 上一版 HNR 只做 soft negative weight：
 
@@ -22,7 +22,7 @@
 ```
 
 这可以减少误推远，但不会主动把疑似相关样本拉近。  
-当前 E2 改为 soft label：
+当前主线使用 soft label：
 
 ```text
 官方正样本：label = 1.0
@@ -108,8 +108,9 @@ hubness_neighbor:
   neighbor_rho: 0.10
   neighbor_topk: 20
 
-  same_modal_threshold: 0.45
-  direct_similarity_threshold: 0.15
+  same_modal_threshold: 0.47
+  direct_similarity_threshold: 0.18
+  candidate_centrality_weight: 0.15
   negative_min_weight: 0.30
 
   soft_label_enable: true
@@ -118,7 +119,7 @@ hubness_neighbor:
   soft_label_warmup_epochs: 5
 
 train:
-  expname: /home/16t/fangzb/CSD_HNR/results_csd_hnr_softlabel_e2
+  expname: /home/16t/fangzb/CSD_HNR/results_csd_hnr_softlabel_e4_quality
   train_epochs: 25
 ```
 
@@ -156,13 +157,13 @@ epoch 12+: 1.0
 ## 启动训练
 
 ```bash
-tmux new-session -d -s csd_hnr_softlabel_e2 'cd /home/16t/fangzb/CSD_HNR && CUDA_VISIBLE_DEVICES=1 PYTHONUNBUFFERED=1 /home/16t/fangzb/miniconda3/envs/coco-omr/bin/python train.py ./configs/pcmepp.yaml'
+tmux new-session -d -s csd_hnr_softlabel_e4_quality 'cd /home/16t/fangzb/CSD_HNR && CUDA_VISIBLE_DEVICES=1 PYTHONUNBUFFERED=1 /home/16t/fangzb/miniconda3/envs/coco-omr/bin/python train.py ./configs/pcmepp.yaml'
 ```
 
 查看训练：
 
 ```bash
-tmux attach -t csd_hnr_softlabel_e2
+tmux attach -t csd_hnr_softlabel_e4_quality
 ```
 
 ## 需要重点观察的日志
@@ -180,7 +181,38 @@ eval_avg/eccv_rprecision
 eval_avg/coco_5k_r1
 ```
 
-## 上一版结果参考
+## 实验记录
+
+当前配置采用 E4-quality 参数：
+
+| 参数 | 值 |
+|---|---:|
+| soft_label_max | 0.30 |
+| same_modal_threshold | 0.47 |
+| direct_similarity_threshold | 0.18 |
+| candidate_centrality_weight | 0.15 |
+| neighbor_rho | 0.10 |
+| lambda_neighbor | 0.02 |
+| negative_min_weight | 0.30 |
+
+E4-quality 已完成，最佳 mAP@R checkpoint 为 epoch 21：
+
+| 指标 | 结果 |
+|---|---:|
+| ECCV mAP@R avg | 40.01 |
+| ECCV R-Precision avg | 49.61 |
+| COCO 5K R@1 avg | 53.86 |
+| Image→Text mAP@R | 32.03 |
+| Text→Image mAP@R | 47.99 |
+| soft_label_mean | 0.00317 |
+| soft_label_count | 885 |
+| pair_weight_mean | 0.9869 |
+| image σ-corr | 0.967 |
+| text σ-corr | 0.881 |
+
+SWA 结果：mAP@R = 39.96，R-Precision = 49.54，COCO 5K R@1 = 54.19。
+
+### 上一版结果参考
 
 CSD-HNR per-dim σ + soft negative weight 版本最佳结果：
 
@@ -200,7 +232,7 @@ CSD-HNR per-dim σ + soft negative weight 版本最佳结果：
 | ECCV R-Precision | 42.42 | 56.21 |
 | COCO 5K R@1 | 59.76 | 45.98 |
 
-该结果说明上一版主要问题是 Image→Text 方向的相关 caption 没有整体排进前 R，因此当前 E2 重点增强疑似假负样本的软相关监督。
+该结果说明上一版主要问题是 Image→Text 方向的相关 caption 没有整体排进前 R，因此当前主线重点增强疑似假负样本的软相关监督。
 
 ## 当前判断
 
