@@ -100,9 +100,9 @@ hubness_neighbor:
     teacher_temperature: 0.05
     student_temperature: 1.0
     evidence_temperature: 0.05
-    same_modal_threshold: 0.45
-    direct_similarity_threshold: 0.15
-    candidate_centrality_weight: 0.10
+    same_modal_threshold: 0.47
+    direct_similarity_threshold: 0.18
+    candidate_centrality_weight: 0.15
     negative_min_weight: 0.30
 
     # HNR soft label：双向一致的疑似假负样本会获得0~soft_label_max
@@ -114,7 +114,7 @@ hubness_neighbor:
 
 # detailed training configuration
 train:
-    expname: /home/16t/fangzb/CSD_HNR/results_csd_hnr_softlabel_e2
+    expname: /home/16t/fangzb/CSD_HNR/results_csd_hnr_softlabel_e4_quality
     train_epochs: 25
     log_step: 100 #每 100 step 记录一次日志。
     pbar_step: 1450 #每 1450 step 更新一次进度条。1450 = 128(batch_size) * 11.33(steps per epoch)
