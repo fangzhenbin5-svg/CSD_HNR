@@ -89,7 +89,7 @@ def test_hnr_uses_feature_queue_without_pair_history():
         (4, 8), logvar_value, requires_grad=True)
     matched = torch.eye(4)
 
-    loss, pair_weight, logs = regularizer(
+    loss, pair_weight, soft_target, logs = regularizer(
         {'mean': image_mean, 'std': image_logvar},
         {'mean': text_mean, 'std': text_logvar},
         matched,

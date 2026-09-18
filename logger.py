@@ -10,8 +10,8 @@ from typing import Dict, Optional
 
 import torch
 
-from lightning.pytorch.loggers import TensorBoardLogger
-from lightning.pytorch.utilities import rank_zero_only
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.utilities import rank_zero_only
 
 
 class PCMEPPLogger(TensorBoardLogger):

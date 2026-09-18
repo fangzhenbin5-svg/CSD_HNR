@@ -10,7 +10,7 @@ import copy
 import yaml
 from datetime import datetime
 
-import lightning.pytorch as pl
+import pytorch_lightning as pl
 
 import numpy as np
 import torch

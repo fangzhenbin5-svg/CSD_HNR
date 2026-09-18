@@ -2,6 +2,10 @@
 
 本工程基于 PCME++ 修改，用于研究 COCO 图文检索中 mAP@R / R-Precision 提升问题。
 
+E15-neighbor015 实验使用 [独立配置](configs/pcmepp_e15_neighbor015.yaml)，
+参数、结果与复现说明见 [E15 实验记录](docs/E15-neighbor015.md)。
+下文的 E4 参数仅用于说明早期基线，不是 E15 的启动配置。
+
 当前主线版本是：
 
 ```text

@@ -10,10 +10,10 @@ import fire #Google 的命令行工具库。把 Python 函数直接变成命令�
 import torch
 from transformers import BertTokenizer
 
-import lightning.pytorch as pl #PyTorch Lightning 管理训练流程
-from lightning.pytorch.callbacks import ModelCheckpoint, ModelSummary, TQDMProgressBar #保存模型 checkpoint，打印模型结构摘要，控制训练进度条三个功能
-from lightning.pytorch.callbacks.early_stopping import EarlyStopping #导入早停 callback
-from lightning.pytorch.strategies import DDPStrategy #DDP 分布式训练策略
+import pytorch_lightning as pl #PyTorch Lightning 管理训练流程
+from pytorch_lightning.callbacks import ModelCheckpoint, ModelSummary, TQDMProgressBar #保存模型 checkpoint，打印模型结构摘要，控制训练进度条三个功能
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping #导入早停 callback
+from pytorch_lightning.strategies import DDPStrategy #DDP 分布式训练策略
 
 from config import parse_config #导入配置解析函数。读取 YAML 配置文件，并支持命令行参数覆盖。
 from logger import PCMEPPLogger #继承自 TensorBoardLogger，负责把 loss / 指标写到 TensorBoard。
@@ -159,7 +159,6 @@ def main(config_path, load_from_checkpoint=None, **kwargs):
         train_dataloaders=train_loader,
         val_dataloaders=val_loader,
         ckpt_path=load_from_checkpoint,
-        weights_only=False if load_from_checkpoint else None, #如果不是从 checkpoint 恢复，就传 None
     )
     #SWA 模型验证，一般用于训练后期平均多个 epoch 的权重，提高泛化性能。
     if model.swa_enabled:
